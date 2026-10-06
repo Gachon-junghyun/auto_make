@@ -204,7 +204,7 @@ def _save_excel_zip(template_path, out_path, updates):
 def read_make_list():
     """
     makeList.xlsx에서 지점별 정보 읽기
-    반환: {지점명: {'light': '조명'/'비조명', 'date': datetime 또는 None}}
+    반환: {지점명: {'light': '조명'/'비조명', 'date': datetime 또는 None, 'jisa': '지사명' 또는 ''}}
     """
     result = {}
     if not os.path.exists(MAKE_LIST_PATH):
@@ -213,6 +213,15 @@ def read_make_list():
         from openpyxl import load_workbook
         wb = load_workbook(MAKE_LIST_PATH, data_only=True)
         ws = wb.active
+
+        # 헤더에서 '지사' 열 위치 탐색 (없으면 None → 지사 미사용)
+        jisa_idx = None
+        header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        for i, h in enumerate(header):
+            if h and str(h).strip() == '지사':
+                jisa_idx = i
+                break
+
         for row in ws.iter_rows(min_row=2, values_only=True):
             if not row[0]:
                 continue
@@ -242,7 +251,12 @@ def read_make_list():
                 except Exception:
                     parsed_date = None
 
-            result[name] = {'light': light, 'date': parsed_date}
+            # 지사 (헤더에 '지사' 열이 있을 때만, 비면 '')
+            jisa = ''
+            if jisa_idx is not None and len(row) > jisa_idx and row[jisa_idx]:
+                jisa = str(row[jisa_idx]).strip()
+
+            result[name] = {'light': light, 'date': parsed_date, 'jisa': jisa}
     except Exception:
         pass
     return result
@@ -383,10 +397,10 @@ def fit_photo_in_slot(slot_x, slot_y, slot_cx, slot_cy, img_w, img_h):
     return x, y, fit_cx, fit_cy
 
 
-def run_make_ppt(branch, bf, branch_dir, log_fn, allow_overwrite=False):
+def run_make_ppt(branch, bf, branch_dir, log_fn, allow_overwrite=False, jisa=''):
     """
     PPT 생성: 사진폼.pptx 템플릿 기반
-    - TextBox 4의 '관저점' → bf 교체
+    - TextBox 4의 '관저점' → bf 교체, 지사 run → jisa 교체(jisa 비면 템플릿 기본값 유지)
     - 기존 p:pic 제거
     - 시공전/시공중/시공후 사진을 각 직사각형 박스 안에 배치
     반환: 저장 경로 또는 None
@@ -410,13 +424,16 @@ def run_make_ppt(branch, bf, branch_dir, log_fn, allow_overwrite=False):
     prs  = Presentation(template_path)
     slide = prs.slides[0]
 
-    # ── 1. 지점명 교체 ─────────────────────────────────
-    # TextBox 4: 여러 run으로 분리된 "충청지사 - 관저점"
-    # '관저점' 텍스트가 있는 run을 bf로 교체
+    # ── 1. 지점명/지사 교체 ─────────────────────────────
+    # TextBox 4: 여러 run으로 분리된 "호남지사 - 관저점"  (['호남지사',' ','- ','관저점'])
+    # 지사 run('~지사')은 jisa로, '관저점' run은 bf로 교체
+    # jisa가 비면 지사 run은 손대지 않아 템플릿 기본값 유지
     for shape in slide.shapes:
         if shape.name == 'TextBox 4' and shape.has_text_frame:
             for para in shape.text_frame.paragraphs:
                 for run in para.runs:
+                    if jisa and run.text.strip().endswith('지사'):
+                        run.text = jisa
                     if '관저점' in run.text:
                         run.text = bf
             break
@@ -830,7 +847,8 @@ def run_make(log_fn, allow_overwrite=False):
         log_fn(f"🎞  [{bf}] PPT 생성 중...")
         ppt_path = run_make_ppt(
             branch, bf, branch_dir, log_fn,
-            allow_overwrite=allow_overwrite
+            allow_overwrite=allow_overwrite,
+            jisa=info.get('jisa', '')
         )
         if ppt_path:
             created.append(ppt_path)
